@@ -1,20 +1,22 @@
 import type { Express } from "express";
 import cookieParser from "cookie-parser";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { db } from "./db";
-import * as schemaTypes from "@shared/schema";
+import { storage } from "../db/storage.ts";
+import { db } from "../db/db.ts";
+import * as schemaTypes from "@shared/schema.ts";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireRole, requireSuperAdmin, requireAdminOrSuperAdmin, requireSchoolContext, createSession, hashPassword, verifyPassword, revokeAllUserSessions } from "./auth";
+import { requireAuth, requireRole, requireSuperAdmin, requireAdminOrSuperAdmin, requireSchoolContext, createSession, hashPassword, verifyPassword, revokeAllUserSessions } from "../middleware/auth.ts";
 import { 
   loginSchema,
   insertTicketSchema, 
   insertWorkLogSchema, 
   insertTicketNoteSchema,
+  insertChallengeCompletionSchema,
   insertUserSchema,
   insertSchoolSchema 
-} from "@shared/schema";
+} from "@shared/schema.ts";
 import { fromError } from "zod-validation-error";
+import bcrypt from "bcrypt";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup cookie parser for session management
@@ -32,6 +34,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: fromError(validation.error).toString() });
       }
 
+      console.error(validation)
+
       const { username, password } = validation.data;
 
       // Find user by username
@@ -39,6 +43,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user || !user.isActive) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
+
+      console.log(user)
 
       // Verify password
       const isValid = await verifyPassword(password, user.passwordHash);
@@ -454,7 +460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updates = req.body;
       
       // Verify student belongs to this school
-      const student = await storage.getUserById(studentId);
+      const student = await storage.getUser(studentId);
       if (!student || student.schoolId !== schoolId) {
         return res.status(404).json({ message: "Student not found in this school" });
       }
@@ -485,7 +491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Verify student belongs to this school
-      const student = await storage.getUserById(studentId);
+      const student = await storage.getUser(studentId);
       if (!student || student.schoolId !== schoolId) {
         return res.status(404).json({ message: "Student not found in this school" });
       }
@@ -507,7 +513,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { schoolId, studentId } = req.params;
       
       // Get student info
-      const student = await storage.getUserById(studentId);
+      const student = await storage.getUser(studentId);
       if (!student || student.schoolId !== schoolId) {
         return res.status(404).json({ message: "Student not found in this school" });
       }
@@ -524,7 +530,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const challengeCompletions = await storage.getUserChallengeCompletions(studentId, schoolId);
       
       // Get work logs
-      const workLogs = await storage.getWorkLogsByStudent(studentId, schoolId);
+      const workLogs = await storage.getWorkLogsByUser(studentId, schoolId);
       
       res.json({
         student: {
@@ -599,7 +605,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get challenge completions for skills progress
       const completions = await storage.getUserChallengeCompletions(user.id, user.schoolId);
-      const allChallenges = await storage.getChallenges(user.schoolId);
+      const allChallenges = await storage.getChallenges(true);
       const skillsProgress = allChallenges.length > 0 
         ? Math.round((completions.length / allChallenges.length) * 100) 
         : 0;
@@ -652,7 +658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get all challenges grouped by category
-      const allChallenges = await storage.getChallenges(user.schoolId);
+      const allChallenges = await storage.getChallenges(true);
       const completions = await storage.getUserChallengeCompletions(user.id, user.schoolId);
       const completedChallengeIds = new Set(completions.map(c => c.challengeId));
 
@@ -728,7 +734,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get student's challenges with progress
+  // ============================================
+  // STUDENT CHALLENGES
+  // ============================================
+
+  // GET /api/student/challenges - List active challenges with per-user completion status
   app.get('/api/student/challenges', requireAuth, async (req: any, res) => {
     try {
       const user = req.user;
@@ -736,14 +746,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "User must belong to a school" });
       }
 
-      // Get all active challenges
-      const allChallenges = await storage.getChallenges(user.schoolId);
-      
-      // Get user's completions
+      const allChallenges = await storage.getChallenges(true);
       const completions = await storage.getUserChallengeCompletions(user.id, user.schoolId);
       const completedChallengeIds = new Set(completions.map(c => c.challengeId));
 
-      // Map challenges with completion status
       const challengesWithProgress = allChallenges.map(challenge => ({
         ...challenge,
         isCompleted: completedChallengeIds.has(challenge.id),
@@ -757,7 +763,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get school rankings
+  // POST /api/student/challenges/:id/complete - Mark a challenge complete once and award points
+  app.post('/api/student/challenges/:id/complete', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const challenge = await storage.getChallenge(req.params.id);
+      if (!challenge) {
+        return res.status(404).json({ message: "Challenge not found" });
+      }
+
+      const alreadyCompleted = await storage.isChallengeCompleted(user.id, challenge.id, user.schoolId);
+      if (alreadyCompleted) {
+        return res.status(409).json({ message: "Challenge already completed" });
+      }
+
+      const completionData = {
+        schoolId: user.schoolId,
+        userId: user.id,
+        challengeId: challenge.id,
+        pointsEarned: challenge.points,
+      };
+
+      const validation = insertChallengeCompletionSchema.safeParse(completionData);
+      if (!validation.success) {
+        return res.status(400).json({ message: fromError(validation.error).toString() });
+      }
+
+      const completion = await storage.completeChallenge(validation.data);
+      const updatedUser = await storage.updateUserPoints(user.id, challenge.points);
+
+      res.status(201).json({ completion, points: updatedUser.points });
+    } catch (error) {
+      console.error("Error completing challenge:", error);
+      res.status(500).json({ message: "Failed to complete challenge" });
+    }
+  });
+
+  // ============================================
+  // STUDENT RANKINGS
+  // ============================================
+
+  // GET /api/student/rankings - Leaderboard for the user's school (by points)
   app.get('/api/student/rankings', requireAuth, async (req: any, res) => {
     try {
       const user = req.user;
@@ -765,44 +815,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "User must belong to a school" });
       }
 
-      // Get all students in the school sorted by points
-      const students = await storage.getUsersBySchool(user.schoolId);
-      const rankedStudents = students
-        .filter((s: any) => s.role === 'student')
-        .sort((a: any, b: any) => (b.points || 0) - (a.points || 0))
-        .map((student: any, index: number) => ({
-          rank: index + 1,
-          id: student.id,
-          name: student.firstName && student.lastName 
-            ? `${student.firstName} ${student.lastName}` 
-            : student.username,
-          points: student.points || 0,
-          streak: student.streak || 0,
-          isCurrentUser: student.id === user.id,
+      const limitRaw = req.query.limit as string | undefined;
+      const limit = limitRaw ? Math.max(1, Math.min(100, Number.parseInt(limitRaw, 10))) : 10;
+
+      const rankings = await storage.getRankings(user.schoolId, limit);
+      const response = rankings
+        .filter((u: any) => u.role === 'student')
+        .map((u: any) => ({
+          rank: u.rank,
+          id: u.id,
+          name: u.firstName && u.lastName ? `${u.firstName} ${u.lastName}` : u.username,
+          points: u.points ?? 0,
+          streak: u.streak ?? 0,
+          isCurrentUser: u.id === user.id,
         }));
 
-      res.json(rankedStudents);
+      res.json(response);
     } catch (error) {
       console.error("Error fetching rankings:", error);
       res.status(500).json({ message: "Failed to fetch rankings" });
-    }
-  });
-
-  // Get resources
-  app.get('/api/student/resources', requireAuth, async (req: any, res) => {
-    try {
-      const user = req.user;
-      if (!user.schoolId) {
-        return res.status(403).json({ message: "User must belong to a school" });
-      }
-
-      // Get all resources
-      const resources = await storage.getResources();
-
-      res.json(resources);
-    } catch (error) {
-      console.error("Error fetching resources:", error);
-      res.status(500).json({ message: "Failed to fetch resources" });
     }
   });
 
@@ -810,6 +841,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // TICKET ENDPOINTS
   // ============================================
 
+  // GET /api/tickets - List tickets for the user's school (supports basic filters)
   app.get('/api/tickets', requireAuth, async (req: any, res) => {
     try {
       const user = req.user;
@@ -829,6 +861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/tickets - Create a new ticket in the user's school (forces status=pending)
   app.post('/api/tickets', requireAuth, async (req: any, res) => {
     try {
       const user = req.user;
@@ -859,6 +892,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PATCH /api/tickets/:id - Update a ticket (admin/super_admin or assigned student)
   app.patch('/api/tickets/:id', requireAuth, async (req: any, res) => {
     try {
       const user = req.user;
@@ -872,6 +906,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Ticket not found" });
       }
 
+      const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+      const isAssignedStudent = user.role === 'student' && existing.assignedTo === user.id;
+      if (!isAdmin && !isAssignedStudent) {
+        return res.status(403).json({ message: "Forbidden - Insufficient permissions" });
+      }
+
       const ticket = await storage.updateTicket(req.params.id, user.schoolId, req.body);
       res.json(ticket);
     } catch (error) {
@@ -880,8 +920,275 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Other endpoints (challenges, work logs, rankings, resources) remain similar...
-  // For brevity, I'm keeping the core auth/admin endpoints
+  // ============================================
+  // TICKET NOTES
+  // ============================================
+
+  // GET /api/tickets/:id/notes - List notes for a ticket (school-scoped)
+  app.get('/api/tickets/:id/notes', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const ticket = await storage.getTicket(req.params.id, user.schoolId);
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      const notes = await storage.getTicketNotes(req.params.id, user.schoolId);
+      res.json(notes);
+    } catch (error) {
+      console.error("Error fetching ticket notes:", error);
+      res.status(500).json({ message: "Failed to fetch ticket notes" });
+    }
+  });
+
+  // POST /api/tickets/:id/notes - Add a note to a ticket (school-scoped)
+  app.post('/api/tickets/:id/notes', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const ticket = await storage.getTicket(req.params.id, user.schoolId);
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      const noteData = {
+        ...req.body,
+        schoolId: user.schoolId,
+        ticketId: req.params.id,
+        userId: user.id,
+      };
+
+      const validation = insertTicketNoteSchema.safeParse(noteData);
+      if (!validation.success) {
+        return res.status(400).json({ message: fromError(validation.error).toString() });
+      }
+
+      const note = await storage.createTicketNote(validation.data);
+      res.status(201).json(note);
+    } catch (error) {
+      console.error("Error creating ticket note:", error);
+      res.status(500).json({ message: "Failed to create ticket note" });
+    }
+  });
+
+  // ============================================
+  // GET TICKETS BY ID
+  // ============================================
+
+  // GET /api/tickets/:id - Fetch a single ticket by id (school-scoped)
+  app.get('/api/tickets/:id', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const ticket = await storage.getTicket(req.params.id, user.schoolId);
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      res.json(ticket);
+
+    } catch (error) {
+      console.error("Error fetching ticket:", error);
+      res.status(500).json({ message: "Failed to fetch ticket" });
+    }
+  });
+
+  // DELETE /api/tickets/:id - Delete a ticket (admin/super_admin only, school-scoped)
+  app.delete('/api/tickets/:id', requireAuth, requireRole('admin', 'super_admin'), async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const existing = await storage.getTicket(req.params.id, user.schoolId);
+      if (!existing) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      await storage.deleteTicket(req.params.id, user.schoolId);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting ticket:", error);
+      res.status(500).json({ message: "Failed to delete ticket" });
+    }
+  });
+
+  // GET /api/work-logs - List work logs for the school (students restricted to their own when filtering)
+  app.get('/api/work-logs', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const requestedUserId = req.query.userId as string | undefined;
+      const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+
+      if (requestedUserId && !isAdmin && requestedUserId !== user.id) {
+        return res.status(403).json({ message: "Forbidden - Insufficient permissions" });
+      }
+
+      const logs = await storage.getWorkLogs(user.schoolId, {
+        userId: requestedUserId,
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+      });
+
+      res.json(logs);
+    } catch (error) {
+      console.error("Error fetching work logs:", error);
+      res.status(500).json({ message: "Failed to fetch work logs" });
+    }
+  });
+
+  // POST /api/work-logs - Create a work log for the current user (school-scoped)
+  app.post('/api/work-logs', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const logData = {
+        ...req.body,
+        schoolId: user.schoolId,
+        userId: user.id,
+      };
+
+      const validation = insertWorkLogSchema.safeParse(logData);
+      if (!validation.success) {
+        return res.status(400).json({ message: fromError(validation.error).toString() });
+      }
+
+      const created = await storage.createWorkLog(validation.data);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("Error creating work log:", error);
+      res.status(500).json({ message: "Failed to create work log" });
+    }
+  });
+
+  // PATCH /api/work-logs/:id - Update a work log (admin/super_admin or owner only, school-scoped)
+  app.patch('/api/work-logs/:id', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+
+      const visibleLogs = await storage.getWorkLogs(user.schoolId, {
+        userId: isAdmin ? undefined : user.id,
+      });
+      const existing = visibleLogs.find(l => l.id === req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Work log not found" });
+      }
+
+      const { id, schoolId, userId, ...rest } = req.body ?? {};
+      const updates: any = {
+        logDate: rest.logDate,
+        hoursWorked: rest.hoursWorked,
+        category: rest.category,
+        description: rest.description,
+      };
+
+      Object.keys(updates).forEach((key) => {
+        if (updates[key] === undefined) delete updates[key];
+      });
+
+      const updated = await storage.updateWorkLog(req.params.id, user.schoolId, updates);
+      res.json(updated);
+    } catch (error: any) {
+      if (error?.message === 'Work log not found') {
+        return res.status(404).json({ message: "Work log not found" });
+      }
+      console.error("Error updating work log:", error);
+      res.status(500).json({ message: "Failed to update work log" });
+    }
+  });
+
+  // DELETE /api/work-logs/:id - Delete a work log (admin/super_admin or owner only, school-scoped)
+  app.delete('/api/work-logs/:id', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+
+      const visibleLogs = await storage.getWorkLogs(user.schoolId, {
+        userId: isAdmin ? undefined : user.id,
+      });
+      const existing = visibleLogs.find(l => l.id === req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Work log not found" });
+      }
+
+      await storage.deleteWorkLog(req.params.id, user.schoolId);
+      res.status(204).send();
+    } catch (error: any) {
+      if (error?.message === 'Work log not found') {
+        return res.status(404).json({ message: "Work log not found" });
+      }
+      console.error("Error deleting work log:", error);
+      res.status(500).json({ message: "Failed to delete work log" });
+    }
+  });
+
+  // GET /api/resources - List global resources (supports category/contentType/search)
+  app.get('/api/resources', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const resources = await storage.getResources({
+        category: req.query.category as string | undefined,
+        contentType: req.query.contentType as string | undefined,
+        search: req.query.search as string | undefined,
+      });
+
+      res.json(resources);
+    } catch (error) {
+      console.error("Error fetching resources:", error);
+      res.status(500).json({ message: "Failed to fetch resources" });
+    }
+  });
+
+  // GET /api/resources/:id - Fetch a single global resource by id
+  app.get('/api/resources/:id', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (!user.schoolId) {
+        return res.status(403).json({ message: "User must belong to a school" });
+      }
+
+      const resource = await storage.getResource(req.params.id);
+      if (!resource) {
+        return res.status(404).json({ message: "Resource not found" });
+      }
+
+      res.json(resource);
+    } catch (error) {
+      console.error("Error fetching resource:", error);
+      res.status(500).json({ message: "Failed to fetch resource" });
+    }
+  });
 
   const httpServer = createServer(app);
   return httpServer;

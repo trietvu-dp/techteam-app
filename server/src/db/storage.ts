@@ -25,7 +25,7 @@ import {
   type InsertUserCertification,
   type Session,
   type InsertSession,
-} from '@shared/schema';
+} from '@shared/schema.ts';
 
 // Filter interfaces
 export interface TicketFilters {
@@ -143,9 +143,9 @@ export interface IStorage {
 }
 
 // Database storage implementation using Drizzle ORM
-import { db } from "./db";
+import { db } from "./db.ts";
 import { eq, and, desc, sql as drizzleSql, or, ilike, gte, lte } from "drizzle-orm";
-import * as schemaTypes from "@shared/schema";
+import * as schemaTypes from "@shared/schema.ts";
 
 export class DbStorage implements IStorage {
   constructor() {
@@ -189,6 +189,7 @@ export class DbStorage implements IStorage {
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     const [user] = await db.select().from(schemaTypes.users).where(eq(schemaTypes.users.username, username));
+    console.log(user);
     return user;
   }
 

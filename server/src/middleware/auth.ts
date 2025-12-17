@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import type { Request, Response, NextFunction } from "express";
-import { storage } from "./storage";
+import { storage } from "../db/storage.ts";
 
 const SALT_ROUNDS = 12;
 const SESSION_EXPIRY_HOURS = 12;

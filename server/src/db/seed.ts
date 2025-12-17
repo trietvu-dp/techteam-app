@@ -1,4 +1,4 @@
-import { storage } from "./storage";
+import { storage } from "./storage.ts";
 
 export async function seedDatabase() {
   console.log("Starting database seeding...");
