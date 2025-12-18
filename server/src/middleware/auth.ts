@@ -129,6 +129,19 @@ export function requireSchoolContext(req: any, res: Response, next: NextFunction
   next();
 }
 
+// Middleware to require user to belong to a school
+export function requireUserSchool(req: any, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  if (!req.user.schoolId) {
+    return res.status(403).json({ message: "User must belong to a school" });
+  }
+
+  next();
+}
+
 // Revoke a session
 export async function revokeSession(sessionId: string) {
   await storage.revokeSession(sessionId);
