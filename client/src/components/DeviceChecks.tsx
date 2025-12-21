@@ -64,6 +64,12 @@ export function DeviceChecks({
   const { user } = useAuth();
   const [selectedDevice, setSelectedDevice] = useState<Ticket | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "table">("list");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filters, setFilters] = useState({
+    status: 'all',
+    deviceType: 'all',
+  });
+  const [showFilters, setShowFilters] = useState(false);
   const [checkItems, setCheckItems] = useState({
     physical: false,
     charging: false,
@@ -144,6 +150,26 @@ export function DeviceChecks({
     pendingCount: devices.filter(d => d.status === 'pending').length,
     issuesCount: devices.filter(d => d.status === 'issue').length,
   }), [devices]);
+
+  // Filter devices based on search and filters
+  const filteredDevices = useMemo(() => {
+    return devices.filter(device => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch =
+          device.student.toLowerCase().includes(query) ||
+          device.type.toLowerCase().includes(query) ||
+          device.number.toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
+      // Status filter
+      if (filters.status !== 'all' && device.status !== filters.status) return false;
+      // Device type filter
+      if (filters.deviceType !== 'all' && device.type.toLowerCase() !== filters.deviceType) return false;
+      return true;
+    });
+  }, [devices, searchQuery, filters]);
 
   function formatRelativeTime(dateString: string) {
     const date = new Date(dateString);
@@ -257,25 +283,79 @@ export function DeviceChecks({
       </div>
 
       {/* Search and Filter */}
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input placeholder="Search student or device..." className="pl-9" />
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input
+              placeholder="Search student or device..."
+              className="pl-9"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <Button
+            variant={showFilters ? "default" : "outline"}
+            size="icon"
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            <Filter className="w-4 h-4" />
+          </Button>
+          <Button
+            variant={viewMode === "table" ? "default" : "outline"}
+            size="icon"
+            onClick={() => setViewMode(viewMode === "list" ? "table" : "list")}
+          >
+            {viewMode === "list" ? (
+              <Table className="w-4 h-4" />
+            ) : (
+              <LayoutList className="w-4 h-4" />
+            )}
+          </Button>
         </div>
-        <Button variant="outline" size="icon">
-          <Filter className="w-4 h-4" />
-        </Button>
-        <Button
-          variant={viewMode === "table" ? "default" : "outline"}
-          size="icon"
-          onClick={() => setViewMode(viewMode === "list" ? "table" : "list")}
-        >
-          {viewMode === "list" ? (
-            <Table className="w-4 h-4" />
-          ) : (
-            <LayoutList className="w-4 h-4" />
-          )}
-        </Button>
+
+        {/* Filter Options */}
+        {showFilters && (
+          <div className="flex flex-wrap gap-2 p-3 bg-slate-50 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-slate-600">Status:</Label>
+              <select
+                className="px-2 py-1 text-sm border rounded-md"
+                value={filters.status}
+                onChange={(e) => setFilters({...filters, status: e.target.value})}
+              >
+                <option value="all">All</option>
+                <option value="completed">Checked</option>
+                <option value="pending">Pending</option>
+                <option value="issue">Issue</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-slate-600">Device:</Label>
+              <select
+                className="px-2 py-1 text-sm border rounded-md"
+                value={filters.deviceType}
+                onChange={(e) => setFilters({...filters, deviceType: e.target.value})}
+              >
+                <option value="all">All</option>
+                <option value="ipad">iPad</option>
+                <option value="chromebook">Chromebook</option>
+              </select>
+            </div>
+            {(filters.status !== 'all' || filters.deviceType !== 'all' || searchQuery) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilters({ status: 'all', deviceType: 'all' });
+                  setSearchQuery('');
+                }}
+              >
+                Clear All
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stats */}
@@ -309,15 +389,17 @@ export function DeviceChecks({
                 {deviceChecksError instanceof Error ? deviceChecksError.message : 'Failed to load device checks. Please try again.'}
               </p>
             </div>
-          ) : devices.length === 0 ? (
+          ) : filteredDevices.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-slate-500 mb-2">No device checks yet</p>
+              <p className="text-slate-500 mb-2">
+                {devices.length === 0 ? 'No device checks yet' : 'No devices match your search or filters'}
+              </p>
               <p className="text-sm text-slate-400">
-                Start a new device check to get started
+                {devices.length === 0 ? 'Start a new device check to get started' : 'Try adjusting your filters'}
               </p>
             </div>
           ) : (
-            devices.map((device) => {
+            filteredDevices.map((device) => {
               const statusInfo = getStatusBadge(device.status);
               return (
                 <Card
@@ -372,7 +454,7 @@ export function DeviceChecks({
               </tr>
             </thead>
             <tbody className="bg-white">
-              {devices.map((device, index) => (
+              {filteredDevices.map((device, index) => (
                 <tr
                   key={device.id}
                   className={`border-b ${index % 2 === 0 ? "bg-slate-50" : ""} cursor-pointer hover:bg-blue-50`}

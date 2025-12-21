@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Textarea } from '@/components/ui/textarea';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
+import { apiRequest, queryClient } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
 import type { Challenge, Resource, User } from '@shared/schema';
 import { 
   Trophy,
@@ -31,9 +33,24 @@ import {
 
 export function Learn() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('challenges');
   const [showLogWork, setShowLogWork] = useState(false);
   const [date, setDate] = useState<Date | undefined>(new Date());
+  const [selectedChallenge, setSelectedChallenge] = useState<{
+    id: string;
+    title: string;
+    description: string;
+    participants: number;
+    daysLeft: number;
+    progress: number;
+    category: string | null;
+    difficulty: string;
+    reward: string;
+    isCompleted?: boolean;
+  } | null>(null);
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [resourceFilter, setResourceFilter] = useState('all');
 
   // Fetch challenges from the database
   const { data: challengesData = [], isLoading: challengesLoading, error: challengesError } = useQuery<Challenge[]>({
@@ -49,21 +66,22 @@ export function Learn() {
 
   // Fetch resources from the database
   const { data: resourcesData = [], isLoading: resourcesLoading, error: resourcesError } = useQuery<Resource[]>({
-    queryKey: ['/api/student/resources'],
+    queryKey: ['/api/resources'],
     enabled: !!user,
   });
 
   // Transform challenges data
-  const challenges = challengesData.map((challenge) => ({
+  const challenges = challengesData.map((challenge: any) => ({
     id: challenge.id,
     title: challenge.title,
     description: challenge.description ?? '',
     participants: challenge.participants ?? 0,
     daysLeft: challenge.daysToComplete ?? 0,
-    progress: 0, // TODO: Calculate from challenge completions
+    progress: challenge.isCompleted ? 100 : 0,
     category: challenge.category,
     difficulty: challenge.difficulty,
     reward: `${challenge.points} pts`,
+    isCompleted: challenge.isCompleted ?? false,
   }));
 
   // Icon components for rankings
@@ -87,6 +105,36 @@ export function Learn() {
 
   const recommendations = resources.slice(0, 3);
   const quickVideos = resources.filter((r) => r.contentType === 'video').slice(0, 3);
+
+  // Filter resources by content type
+  const filteredResources = useMemo(() => {
+    if (resourceFilter === 'all') return resources;
+    return resources.filter(r => r.contentType === resourceFilter);
+  }, [resources, resourceFilter]);
+
+  // Handle challenge completion
+  const handleCompleteChallenge = async () => {
+    if (!selectedChallenge) return;
+    setIsCompleting(true);
+    try {
+      await apiRequest('POST', `/api/student/challenges/${selectedChallenge.id}/complete`, {});
+      queryClient.invalidateQueries({ queryKey: ['/api/student/challenges'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/student/rankings'] });
+      toast({
+        title: 'Challenge Completed!',
+        description: `You earned ${selectedChallenge.reward}!`,
+      });
+      setSelectedChallenge(null);
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to complete challenge',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCompleting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -135,7 +183,12 @@ export function Learn() {
                 </div>
               ) : (
                 challenges.map((challenge) => (
-                  <Card key={challenge.id} className="p-4" data-testid={`card-challenge-${challenge.id}`}>
+                  <Card
+                    key={challenge.id}
+                    className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+                    data-testid={`card-challenge-${challenge.id}`}
+                    onClick={() => setSelectedChallenge(challenge)}
+                  >
                   <div className="flex items-start gap-3">
                     <div className="p-2 bg-purple-50 rounded-lg">
                       <Target className="w-5 h-5 text-purple-600" />
@@ -398,23 +451,71 @@ export function Learn() {
             </p>
           </Card>
 
-          {/* Search would go here */}
+          {/* Content Type Filter */}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={resourceFilter === 'all' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setResourceFilter('all')}
+            >
+              All
+            </Button>
+            <Button
+              variant={resourceFilter === 'video' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setResourceFilter('video')}
+            >
+              <Video className="w-4 h-4 mr-1" /> Videos
+            </Button>
+            <Button
+              variant={resourceFilter === 'article' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setResourceFilter('article')}
+            >
+              <BookOpen className="w-4 h-4 mr-1" /> Articles
+            </Button>
+            <Button
+              variant={resourceFilter === 'document' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setResourceFilter('document')}
+            >
+              <ExternalLink className="w-4 h-4 mr-1" /> Documents
+            </Button>
+            <Button
+              variant={resourceFilter === 'interactive' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setResourceFilter('interactive')}
+            >
+              <Star className="w-4 h-4 mr-1" /> Interactive
+            </Button>
+          </div>
           <div className="space-y-2">
-            <h3 className="mb-3">Recommended Resources</h3>
-            {resources.map((resource, index) => (
-              <Card key={index} className="p-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h4 className="text-sm">{resource.title}</h4>
-                      <Badge variant="secondary" className="text-xs">{resource.category}</Badge>
+            <h3 className="mb-3">
+              {resourceFilter === 'all' ? 'All Resources' : `${resourceFilter.charAt(0).toUpperCase() + resourceFilter.slice(1)}s`}
+              <span className="text-sm text-slate-500 font-normal ml-2">({filteredResources.length})</span>
+            </h3>
+            {filteredResources.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-slate-500 mb-2">No {resourceFilter} resources found</p>
+                <p className="text-sm text-slate-400">Try selecting a different content type</p>
+              </div>
+            ) : (
+              filteredResources.map((resource, index) => (
+                <Card key={index} className="p-3 cursor-pointer hover:shadow-md transition-shadow">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h4 className="text-sm">{resource.title}</h4>
+                        <Badge variant="secondary" className="text-xs">{resource.category}</Badge>
+                        <Badge className="text-xs bg-slate-100 text-slate-600">{resource.contentType}</Badge>
+                      </div>
+                      <p className="text-xs text-slate-600">{resource.description}</p>
                     </div>
-                    <p className="text-xs text-slate-600">{resource.description}</p>
+                    <ExternalLink className="w-4 h-4 text-slate-400 ml-2" />
                   </div>
-                  <ExternalLink className="w-4 h-4 text-slate-400 ml-2" />
-                </div>
-              </Card>
-            ))}
+                </Card>
+              ))
+            )}
           </div>
 
           {/* Topics/Scenarios */}
@@ -485,6 +586,73 @@ export function Learn() {
             <Button onClick={() => setShowLogWork(false)}>
               Submit
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Challenge Detail Dialog */}
+      <Dialog open={!!selectedChallenge} onOpenChange={() => setSelectedChallenge(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{selectedChallenge?.title}</DialogTitle>
+            <div className="flex gap-2 mt-2">
+              <Badge className={
+                selectedChallenge?.difficulty === 'beginner' ? 'bg-green-100 text-green-700' :
+                selectedChallenge?.difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-red-100 text-red-700'
+              }>
+                {selectedChallenge?.difficulty}
+              </Badge>
+              <Badge variant="secondary">{selectedChallenge?.reward}</Badge>
+              {selectedChallenge?.isCompleted && (
+                <Badge className="bg-green-600 text-white">Completed</Badge>
+              )}
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-medium text-sm mb-1">Description</h3>
+              <p className="text-sm text-slate-600">{selectedChallenge?.description}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-slate-500">Category</p>
+                <p className="font-medium capitalize">{selectedChallenge?.category}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Points</p>
+                <p className="font-medium">{selectedChallenge?.reward}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Participants</p>
+                <p className="font-medium">{selectedChallenge?.participants} joined</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Time Remaining</p>
+                <p className="font-medium">{selectedChallenge?.daysLeft} days left</p>
+              </div>
+            </div>
+
+            {selectedChallenge?.isCompleted && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm text-green-700 font-medium">
+                  You've already completed this challenge!
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedChallenge(null)}>
+              Close
+            </Button>
+            {!selectedChallenge?.isCompleted && (
+              <Button onClick={handleCompleteChallenge} disabled={isCompleting}>
+                {isCompleting ? 'Completing...' : 'Mark Complete'}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

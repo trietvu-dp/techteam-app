@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Building2, UserPlus, GraduationCap, LogOut } from 'lucide-react';
+import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useAuth } from '@/hooks/useAuth';
 import type { School, User } from '@shared/schema';
 
@@ -97,6 +99,7 @@ export default function SuperAdminDashboard() {
       return await apiRequest('POST', '/api/admin/school-admins', data);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/all-school-admins'] });
       toast({ title: 'Success', description: 'School admin created successfully' });
       setAdminForm({ schoolId: '', username: '', email: '', password: '', firstName: '', lastName: '' });
     },
@@ -111,6 +114,7 @@ export default function SuperAdminDashboard() {
       return await apiRequest('POST', '/api/admin/students', data);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/all-students'] });
       toast({ title: 'Success', description: 'Student created successfully' });
       setStudentForm({ schoolId: '', username: '', email: '', password: '', firstName: '', lastName: '' });
     },
@@ -140,6 +144,7 @@ export default function SuperAdminDashboard() {
               <p className="text-sm font-medium" data-testid="text-username">{user?.username}</p>
               <p className="text-xs text-muted-foreground" data-testid="text-role">{user?.role}</p>
             </div>
+            <ThemeToggle />
             <Button variant="outline" size="sm" onClick={handleLogout} data-testid="button-logout">
               <LogOut className="h-4 w-4 mr-2" />
               Logout
@@ -150,6 +155,7 @@ export default function SuperAdminDashboard() {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
+        <ErrorBoundary>
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6" data-testid="tabs-navigation">
             <TabsTrigger value="schools" data-testid="tab-schools">
@@ -554,6 +560,7 @@ export default function SuperAdminDashboard() {
             </div>
           </TabsContent>
         </Tabs>
+        </ErrorBoundary>
       </main>
     </div>
   );
