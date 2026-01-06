@@ -15,6 +15,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Setup cookie parser for session management
     app.use(cookieParser());
 
+    // Health check endpoint for Docker/load balancer monitoring
+    app.get('/api/health', (_req, res) => {
+        res.status(200).json({
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime()
+        });
+    });
+
     // Register all route modules
     app.use('/api/auth', authRouter);
     app.use('/api/admin', adminRouter);
