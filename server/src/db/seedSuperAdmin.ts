@@ -1,5 +1,5 @@
-import { storage } from "./storage";
-import { hashPassword } from "./auth";
+import { storage } from "./storage.ts";
+import { hashPassword } from "../middleware/auth.ts";
 
 async function seedSuperAdmin() {
   console.log("Creating super admin account...");

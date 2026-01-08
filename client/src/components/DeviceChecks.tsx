@@ -40,8 +40,10 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { STUDENTS } from "@/data/students";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Ticket } from "@shared/schema";
 
 interface Teacher {
@@ -50,6 +52,16 @@ interface Teacher {
   lastName: string | null;
   username: string;
   email: string;
+}
+
+interface TransformedDevice {
+  id: string;
+  type: string;
+  number: string;
+  student: string;
+  grade: string;
+  status: string;
+  lastCheck: string;
 }
 
 interface DeviceChecksProps {
@@ -62,8 +74,15 @@ export function DeviceChecks({
   onTriggerComplete,
 }: DeviceChecksProps) {
   const { user } = useAuth();
-  const [selectedDevice, setSelectedDevice] = useState<Ticket | null>(null);
+  const { toast } = useToast();
+  const [selectedDevice, setSelectedDevice] = useState<TransformedDevice | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "table">("list");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filters, setFilters] = useState({
+    status: 'all',
+    deviceType: 'all',
+  });
+  const [showFilters, setShowFilters] = useState(false);
   const [checkItems, setCheckItems] = useState({
     physical: false,
     charging: false,
@@ -81,10 +100,10 @@ export function DeviceChecks({
     "iPad" | "Chromebook" | null
   >(null);
 
-  // Fetch teachers for the current school
+  // Fetch teachers for the current school (student-accessible endpoint)
   const { data: teachers = [], isLoading: teachersLoading, isError } = useQuery<Teacher[]>({
-    queryKey: user?.schoolId ? [`/api/schools/${user.schoolId}/teachers`] : ['no-school'],
-    enabled: !!user?.schoolId,
+    queryKey: ['/api/student/teachers'],
+    enabled: !!user,
   });
 
   // Form state
@@ -120,9 +139,102 @@ export function DeviceChecks({
   }, [triggerNew]);
 
   // Fetch device checks from the database
-  const { data: deviceChecksData = [], isLoading: deviceChecksLoading, error: deviceChecksError } = useQuery<Ticket[]>({
+  const { data: deviceChecksData = [], isLoading: deviceChecksLoading, error: deviceChecksError, refetch: refetchDeviceChecks } = useQuery<Ticket[]>({
     queryKey: ['/api/student/device-checks'],
     enabled: !!user,
+  });
+
+  // Mutation for creating a new device check
+  const createDeviceCheckMutation = useMutation({
+    mutationFn: async (data: {
+      deviceType: string;
+      teacher: string;
+      roomNumber: string;
+      allPresent: boolean;
+      missingStudents: string[];
+      allCharged: boolean;
+      notChargedStudents: string[];
+      anyMissing: boolean;
+      missingDeviceStudents: string[];
+      anyBroken: boolean;
+      brokenAssetTag: string;
+      lteWorking: boolean | null;
+      lteBrokenAssetTag: string;
+    }) => {
+      const payload = {
+        studentName: user?.firstName && user?.lastName
+          ? `${user.firstName} ${user.lastName}`
+          : user?.username || 'Unknown',
+        studentGrade: 'N/A',
+        deviceType: data.deviceType.toLowerCase(),
+        issueType: 'check',
+        issueDescription: `Device check for ${data.deviceType} in room ${data.roomNumber}`,
+        teacher: data.teacher,
+        roomNumber: data.roomNumber,
+        allPresent: data.allPresent,
+        missingStudents: data.missingStudents,
+        allCharged: data.allCharged,
+        notChargedStudents: data.notChargedStudents,
+        anyMissing: data.anyMissing,
+        missingDeviceStudents: data.missingDeviceStudents,
+        anyBroken: data.anyBroken,
+        brokenAssetTag: data.brokenAssetTag || null,
+        lteWorking: data.lteWorking,
+        lteBrokenAssetTag: data.lteBrokenAssetTag || null,
+      };
+
+      const res = await apiRequest('POST', '/api/tickets', payload);
+      return res.json();
+    },
+    onSuccess: async () => {
+      // Force refetch the device checks
+      await refetchDeviceChecks();
+      queryClient.invalidateQueries({ queryKey: ['/api/student/dashboard-stats'] });
+      toast({
+        title: 'Success',
+        description: 'Device check submitted successfully!',
+      });
+      setShowNewCheckFlow(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Mutation for updating device check status
+  const updateDeviceCheckMutation = useMutation({
+    mutationFn: async ({ ticketId, status }: { ticketId: string; status: string }) => {
+      const res = await apiRequest('PATCH', `/api/tickets/${ticketId}`, { status });
+      return res.json();
+    },
+    onSuccess: async () => {
+      // Force refetch the device checks
+      await refetchDeviceChecks();
+      queryClient.invalidateQueries({ queryKey: ['/api/student/dashboard-stats'] });
+      toast({
+        title: 'Success',
+        description: 'Device check updated successfully!',
+      });
+      setSelectedDevice(null);
+      setCheckItems({
+        physical: false,
+        charging: false,
+        screen: false,
+        keyboard: false,
+        software: false,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
   });
 
   // Transform device checks data to match UI expectations
@@ -145,8 +257,28 @@ export function DeviceChecks({
     issuesCount: devices.filter(d => d.status === 'issue').length,
   }), [devices]);
 
-  function formatRelativeTime(dateString: string) {
-    const date = new Date(dateString);
+  // Filter devices based on search and filters
+  const filteredDevices = useMemo(() => {
+    return devices.filter(device => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch =
+          device.student.toLowerCase().includes(query) ||
+          device.type.toLowerCase().includes(query) ||
+          device.number.toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
+      // Status filter
+      if (filters.status !== 'all' && device.status !== filters.status) return false;
+      // Device type filter
+      if (filters.deviceType !== 'all' && device.type.toLowerCase() !== filters.deviceType) return false;
+      return true;
+    });
+  }, [devices, searchQuery, filters]);
+
+  function formatRelativeTime(dateInput: Date | string) {
+    const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
     const now = new Date();
     const diffInMs = now.getTime() - date.getTime();
     const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
@@ -231,15 +363,58 @@ export function DeviceChecks({
     setNewCheckStep("form");
   };
 
-  const handleFormSubmit = () => {
-    // Submit form logic here
-    console.log("Submitting form:", {
-      deviceType: selectedDeviceType,
-      ...formData,
-      date: currentDate,
-      time: currentTime,
+  const handleDeviceCheckSubmit = () => {
+    if (!selectedDevice) return;
+
+    // Determine status based on check items - if all checks pass, it's completed; otherwise it's an issue
+    const allChecksPassed = checkItems.physical && checkItems.charging && checkItems.screen && checkItems.keyboard && checkItems.software;
+    const status = allChecksPassed ? 'completed' : 'issue';
+
+    updateDeviceCheckMutation.mutate({
+      ticketId: String(selectedDevice.id),
+      status,
     });
-    setShowNewCheckFlow(false);
+  };
+
+  const handleFormSubmit = () => {
+    if (!selectedDeviceType) return;
+
+    // Validate required fields
+    const errors: string[] = [];
+    if (!formData.teacher) errors.push('Teacher Name');
+    if (!formData.roomNumber) errors.push('Room Number');
+    if (!formData.allPresent) errors.push('Are all devices present');
+    if (!formData.allCharged) errors.push('Are all devices charged');
+    if (!formData.anyMissing) errors.push('Any devices missing or stolen');
+    if (!formData.anyBroken) errors.push('Any devices broken');
+    if (selectedDeviceType === 'Chromebook' && !formData.lteWorking) {
+      errors.push('LTE working status');
+    }
+
+    if (errors.length > 0) {
+      toast({
+        title: 'Required Fields Missing',
+        description: `Please fill in: ${errors.join(', ')}`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    createDeviceCheckMutation.mutate({
+      deviceType: selectedDeviceType,
+      teacher: formData.teacher,
+      roomNumber: formData.roomNumber,
+      allPresent: formData.allPresent === 'yes',
+      missingStudents: formData.missingStudents,
+      allCharged: formData.allCharged === 'yes',
+      notChargedStudents: formData.notChargedStudents,
+      anyMissing: formData.anyMissing === 'yes',
+      missingDeviceStudents: formData.missingDeviceStudents,
+      anyBroken: formData.anyBroken === 'yes',
+      brokenAssetTag: formData.brokenAssetTag,
+      lteWorking: selectedDeviceType === 'Chromebook' ? formData.lteWorking === 'yes' : null,
+      lteBrokenAssetTag: formData.lteBrokenAssetTag,
+    });
   };
 
   return (
@@ -257,25 +432,79 @@ export function DeviceChecks({
       </div>
 
       {/* Search and Filter */}
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input placeholder="Search student or device..." className="pl-9" />
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input
+              placeholder="Search student or device..."
+              className="pl-9"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <Button
+            variant={showFilters ? "default" : "outline"}
+            size="icon"
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            <Filter className="w-4 h-4" />
+          </Button>
+          <Button
+            variant={viewMode === "table" ? "default" : "outline"}
+            size="icon"
+            onClick={() => setViewMode(viewMode === "list" ? "table" : "list")}
+          >
+            {viewMode === "list" ? (
+              <Table className="w-4 h-4" />
+            ) : (
+              <LayoutList className="w-4 h-4" />
+            )}
+          </Button>
         </div>
-        <Button variant="outline" size="icon">
-          <Filter className="w-4 h-4" />
-        </Button>
-        <Button
-          variant={viewMode === "table" ? "default" : "outline"}
-          size="icon"
-          onClick={() => setViewMode(viewMode === "list" ? "table" : "list")}
-        >
-          {viewMode === "list" ? (
-            <Table className="w-4 h-4" />
-          ) : (
-            <LayoutList className="w-4 h-4" />
-          )}
-        </Button>
+
+        {/* Filter Options */}
+        {showFilters && (
+          <div className="flex flex-wrap gap-2 p-3 bg-slate-50 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-slate-600">Status:</Label>
+              <select
+                className="px-2 py-1 text-sm border rounded-md"
+                value={filters.status}
+                onChange={(e) => setFilters({...filters, status: e.target.value})}
+              >
+                <option value="all">All</option>
+                <option value="completed">Checked</option>
+                <option value="pending">Pending</option>
+                <option value="issue">Issue</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-slate-600">Device:</Label>
+              <select
+                className="px-2 py-1 text-sm border rounded-md"
+                value={filters.deviceType}
+                onChange={(e) => setFilters({...filters, deviceType: e.target.value})}
+              >
+                <option value="all">All</option>
+                <option value="ipad">iPad</option>
+                <option value="chromebook">Chromebook</option>
+              </select>
+            </div>
+            {(filters.status !== 'all' || filters.deviceType !== 'all' || searchQuery) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilters({ status: 'all', deviceType: 'all' });
+                  setSearchQuery('');
+                }}
+              >
+                Clear All
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stats */}
@@ -309,15 +538,17 @@ export function DeviceChecks({
                 {deviceChecksError instanceof Error ? deviceChecksError.message : 'Failed to load device checks. Please try again.'}
               </p>
             </div>
-          ) : devices.length === 0 ? (
+          ) : filteredDevices.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-slate-500 mb-2">No device checks yet</p>
+              <p className="text-slate-500 mb-2">
+                {devices.length === 0 ? 'No device checks yet' : 'No devices match your search or filters'}
+              </p>
               <p className="text-sm text-slate-400">
-                Start a new device check to get started
+                {devices.length === 0 ? 'Start a new device check to get started' : 'Try adjusting your filters'}
               </p>
             </div>
           ) : (
-            devices.map((device) => {
+            filteredDevices.map((device) => {
               const statusInfo = getStatusBadge(device.status);
               return (
                 <Card
@@ -372,7 +603,7 @@ export function DeviceChecks({
               </tr>
             </thead>
             <tbody className="bg-white">
-              {devices.map((device, index) => (
+              {filteredDevices.map((device, index) => (
                 <tr
                   key={device.id}
                   className={`border-b ${index % 2 === 0 ? "bg-slate-50" : ""} cursor-pointer hover:bg-blue-50`}
@@ -538,8 +769,11 @@ export function DeviceChecks({
             <Button variant="outline" onClick={() => setSelectedDevice(null)}>
               Cancel
             </Button>
-            <Button onClick={() => setSelectedDevice(null)}>
-              Submit Check
+            <Button
+              onClick={handleDeviceCheckSubmit}
+              disabled={updateDeviceCheckMutation.isPending}
+            >
+              {updateDeviceCheckMutation.isPending ? 'Submitting...' : 'Submit Check'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1143,7 +1377,13 @@ export function DeviceChecks({
                 >
                   Back
                 </Button>
-                <Button onClick={handleFormSubmit}>Submit Check</Button>
+                <Button
+                  type="button"
+                  onClick={handleFormSubmit}
+                  disabled={createDeviceCheckMutation.isPending}
+                >
+                  {createDeviceCheckMutation.isPending ? 'Submitting...' : 'Submit Check'}
+                </Button>
               </DialogFooter>
             </>
           )}

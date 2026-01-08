@@ -31,7 +31,13 @@ export default function Login() {
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
     try {
-      await apiRequest('POST', '/api/auth/login', data);
+      const res = await apiRequest('POST', '/api/auth/login', data);
+      const loginResponse = await res.json();
+
+      sessionStorage.setItem("auth:loginResponse", JSON.stringify(loginResponse));
+      if (loginResponse?.user) {
+        sessionStorage.setItem("auth:user", JSON.stringify(loginResponse.user));
+      }
 
       toast({
         title: "Login successful",

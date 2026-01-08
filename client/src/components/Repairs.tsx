@@ -25,27 +25,12 @@ import {
   AlertCircle,
   CheckCircle,
   Wrench,
-  ChevronDown,
-  X,
 } from "lucide-react";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Checkbox } from "@/components/ui/checkbox";
-import { STUDENTS } from "@/data/students";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import type { Ticket } from "@shared/schema";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import type { Ticket, TicketNote } from "@shared/schema";
 
 interface RepairsProps {
   triggerNew?: boolean;
@@ -54,19 +39,85 @@ interface RepairsProps {
 
 export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
   const { user } = useAuth();
+  const { toast } = useToast();
+  const sessionUser = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem("auth:user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+  const effectiveUser = user ?? sessionUser;
+  const isStudentFromSession = sessionUser?.role === "student";
   const [showNewRepair, setShowNewRepair] = useState(false);
-  const [selectedRepair, setSelectedRepair] = useState<Ticket | null>(null);
-  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
-  const [studentOpen, setStudentOpen] = useState(false);
+  const [showUpdateStatus, setShowUpdateStatus] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<
+    "pending" | "in_progress" | "completed" | "issue"
+  >("pending");
+
+  const [selectedRepair, setSelectedRepair] = useState<null | {
+    id: string;
+    device: string;
+    student: string;
+    issue: string;
+    priority: string;
+    status: string;
+    submitted: string;
+    assignedTo: string
+  }>(null);
+
+  const [newDeviceNumber, setNewDeviceNumber] = useState("");
+  const [newStudentName, setNewStudentName] = useState("");
+  const [newStudentGrade, setNewStudentGrade] = useState("");
+  const [newDeviceType, setNewDeviceType] = useState<
+    "" | "ipad" | "chromebook" | "laptop" | "pc_laptop" | "macbook"
+  >("");
+  const [newIssueDescription, setNewIssueDescription] = useState("");
+  const [newIssueType, setNewIssueType] = useState<"repair">("repair");
+  const [newPriority, setNewPriority] = useState<"low" | "medium" | "high">(
+    "medium",
+  );
+  const [lastSubmittedRepair, setLastSubmittedRepair] = useState<null | {
+    deviceNumber: string;
+    studentName: string;
+    studentGrade: string;
+    deviceType: "" | "ipad" | "chromebook" | "laptop" | "pc_laptop" | "macbook";
+    issueDescription: string;
+    issueType: "repair";
+    priority: "low" | "medium" | "high";
+  }>(null);
+
+  // Filter state
+  const [filters, setFilters] = useState({
+    status: 'all',
+    deviceType: 'all',
+    assignedToMe: false,
+  });
+
+  // Notes state
+  const [ticketNotes, setTicketNotes] = useState<TicketNote[]>([]);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [isLoadingNotes, setIsLoadingNotes] = useState(false);
+  const [isAddingNote, setIsAddingNote] = useState(false);
 
   // Fetch repairs from the database
   const { data: repairsData = [], isLoading: repairsLoading, error: repairsError } = useQuery<Ticket[]>({
     queryKey: ['/api/student/repairs'],
-    enabled: !!user,
+    enabled: !!effectiveUser,
   });
 
   // Transform repairs data to match UI expectations
-  const repairs = useMemo(() => 
+  const repairs = useMemo<Array<{
+    id: string;
+    device: string;
+    student: string;
+    issue: string;
+    priority: string;
+    status: string;
+    submitted: string;
+    assignedTo: string;
+  }>>(() =>
     repairsData.map((repair) => ({
       id: repair.id,
       device: `${repair.deviceType} ${repair.deviceNumber || ''}`,
@@ -75,9 +126,9 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
       priority: repair.priority || 'medium',
       status: repair.status,
       submitted: formatRelativeTime(repair.createdAt),
-      assignedTo: repair.assignedTo === user?.id ? 'You' : 'Tech Team',
+      assignedTo: repair.assignedTo === effectiveUser?.id ? 'You' : 'Tech Team',
     }))
-  , [repairsData, user]);
+  , [repairsData, effectiveUser]);
 
   // Calculate actual counts from data with memoization
   const { pendingRepairsCount, inProgressCount, completedCount } = useMemo(() => ({
@@ -86,13 +137,23 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
     completedCount: repairs.filter(r => r.status === 'completed').length,
   }), [repairs]);
 
-  function formatRelativeTime(dateString: string) {
-    const date = new Date(dateString);
+  // Filter repairs based on current filters
+  const filteredRepairs = useMemo(() => {
+    return repairs.filter(repair => {
+      if (filters.status !== 'all' && repair.status !== filters.status) return false;
+      if (filters.deviceType !== 'all' && !repair.device.toLowerCase().includes(filters.deviceType)) return false;
+      if (filters.assignedToMe && repair.assignedTo !== 'You') return false;
+      return true;
+    });
+  }, [repairs, filters]);
+
+  function formatRelativeTime(dateInput: string | Date) {
+    const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
     const now = new Date();
     const diffInMs = now.getTime() - date.getTime();
     const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
     const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
-    
+
     if (diffInHours < 1) return 'Just now';
     if (diffInHours < 24) return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
     if (diffInDays === 1) return '1 day ago';
@@ -104,21 +165,118 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
   useEffect(() => {
     if (triggerNew) {
       setShowNewRepair(true);
-      setSelectedStudents([]);
       onTriggerComplete?.();
     }
   }, [triggerNew]);
 
-  // Helper functions for multi-select
-  const toggleStudent = (students: string[], student: string) => {
-    if (students.includes(student)) {
-      return students.filter((s) => s !== student);
+  // Auto-populate student name from session storage for students
+  useEffect(() => {
+    if (isStudentFromSession && sessionUser) {
+      const fullName = `${sessionUser.firstName || ''} ${sessionUser.lastName || ''}`.trim();
+      setNewStudentName(fullName);
     }
-    return [...students, student];
+  }, [isStudentFromSession, sessionUser]);
+
+  // Fetch notes when a repair is selected
+  useEffect(() => {
+    if (selectedRepair) {
+      setIsLoadingNotes(true);
+      fetch(`/api/tickets/${selectedRepair.id}/notes`, { credentials: 'include' })
+        .then(res => res.json())
+        .then(data => {
+          setTicketNotes(Array.isArray(data) ? data : []);
+        })
+        .catch(err => {
+          console.error('Failed to fetch notes:', err);
+          setTicketNotes([]);
+        })
+        .finally(() => setIsLoadingNotes(false));
+    } else {
+      setTicketNotes([]);
+      setNewNoteText("");
+    }
+  }, [selectedRepair]);
+
+  // Handle adding a new note
+  const handleAddNote = async () => {
+    if (!selectedRepair || !newNoteText.trim()) return;
+    setIsAddingNote(true);
+    try {
+      const res = await apiRequest('POST', `/api/tickets/${selectedRepair.id}/notes`, {
+        noteText: newNoteText.trim()
+      });
+      const newNote = await res.json();
+      setTicketNotes(prev => [...prev, newNote]);
+      setNewNoteText("");
+      toast({
+        title: 'Note added',
+        description: 'Your note has been saved.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to add note',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAddingNote(false);
+    }
   };
 
-  const removeStudent = (students: string[], student: string) => {
-    return students.filter((s) => s !== student);
+  const handleSubmitRepair = async () => {
+    const payload = {
+      deviceNumber: newDeviceNumber,
+      studentName: newStudentName,
+      studentGrade: isStudentFromSession ? newStudentGrade : "N/A",
+      deviceType: newDeviceType,
+      issueDescription: newIssueDescription,
+      issueType: newIssueType,
+      status: 'pending',
+      priority: newPriority,
+    };
+
+    setLastSubmittedRepair(payload);
+    console.log(payload);
+
+    if (!payload.deviceType) {
+      setShowNewRepair(false);
+      return;
+    }
+
+    if (isStudentFromSession && !payload.studentGrade) {
+      setShowNewRepair(false);
+      return;
+    }
+    try {
+      const res = await apiRequest('POST', '/api/tickets', payload);
+      const repairResponse = await res.json();
+      console.log(repairResponse);
+      queryClient.invalidateQueries({ queryKey: ["/api/student/repairs"] });
+    } catch (error) {
+      console.error(error);
+    }
+
+    setShowNewRepair(false);
+  };
+
+  const handleOpenUpdateStatus = () => {
+    if (!selectedRepair) return;
+    setUpdateStatus(selectedRepair.status as "pending" | "in_progress" | "completed" | "issue");
+    setShowUpdateStatus(true);
+  };
+
+  const handleUpdateStatus = async () => {
+    if (!selectedRepair) return;
+    try {
+      await apiRequest("PATCH", `/api/tickets/${selectedRepair.id}`, {
+        status: updateStatus,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/student/repairs"] });
+      setSelectedRepair({ ...selectedRepair, status: updateStatus });
+      setShowUpdateStatus(false);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   const getPriorityColor = (priority: string) => {
@@ -150,6 +308,11 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
         label: "Completed",
         className: "bg-green-100 text-green-700",
       },
+      issue: {
+        icon: AlertCircle,
+        label: "Issue",
+        className: "bg-red-100 text-red-700",
+      },
     };
     return info[status] || info.pending;
   };
@@ -162,8 +325,8 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
           <h2>Repair Tracking</h2>
           <p className="text-slate-600">Monitor device repairs</p>
         </div>
-        <Button size="icon" onClick={() => setShowNewRepair(true)}>
-          <Plus className="w-4 h-4" />
+        <Button onClick={() => setShowNewRepair(true)}>
+          <Plus className="w-4 h-4 mr-2" />
           New Repair Ticket
         </Button>
       </div>
@@ -190,6 +353,54 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
         </Card>
       </div>
 
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2">
+        <Select value={filters.status} onValueChange={(v) => setFilters({...filters, status: v})}>
+          <SelectTrigger className="w-32">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="in_progress">In Progress</SelectItem>
+            <SelectItem value="completed">Completed</SelectItem>
+            <SelectItem value="issue">Issue</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filters.deviceType} onValueChange={(v) => setFilters({...filters, deviceType: v})}>
+          <SelectTrigger className="w-36">
+            <SelectValue placeholder="Device Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Devices</SelectItem>
+            <SelectItem value="ipad">iPad</SelectItem>
+            <SelectItem value="chromebook">Chromebook</SelectItem>
+            <SelectItem value="laptop">Laptop</SelectItem>
+            <SelectItem value="pc_laptop">PC Laptop</SelectItem>
+            <SelectItem value="macbook">MacBook</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Button
+          variant={filters.assignedToMe ? "default" : "outline"}
+          size="sm"
+          onClick={() => setFilters({...filters, assignedToMe: !filters.assignedToMe})}
+        >
+          Assigned to Me
+        </Button>
+
+        {(filters.status !== 'all' || filters.deviceType !== 'all' || filters.assignedToMe) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFilters({ status: 'all', deviceType: 'all', assignedToMe: false })}
+          >
+            Clear Filters
+          </Button>
+        )}
+      </div>
+
       {/* Repairs List */}
       <div className="space-y-2">
         {repairsLoading ? (
@@ -203,15 +414,17 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
               {repairsError instanceof Error ? repairsError.message : 'Failed to load repairs. Please try again.'}
             </p>
           </div>
-        ) : repairs.length === 0 ? (
+        ) : filteredRepairs.length === 0 ? (
           <div className="text-center py-8">
-            <p className="text-slate-500 mb-2">No repairs yet</p>
+            <p className="text-slate-500 mb-2">
+              {repairs.length === 0 ? 'No repairs yet' : 'No repairs match your filters'}
+            </p>
             <p className="text-sm text-slate-400">
-              Report a new repair to get started
+              {repairs.length === 0 ? 'Report a new repair to get started' : 'Try adjusting your filters'}
             </p>
           </div>
         ) : (
-          repairs.map((repair) => {
+          filteredRepairs.map((repair) => {
             const statusInfo = getStatusInfo(repair.status);
             const StatusIcon = statusInfo.icon;
 
@@ -264,86 +477,80 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
 
           <div className="space-y-4">
             <div>
-              <Label htmlFor="device-id">Device ID</Label>
-              <Input id="device-id" placeholder="e.g., Chromebook #245" />
+              <Label htmlFor="device-number">Device Number</Label>
+              <Input
+                id="device-number"
+                placeholder="e.g., Chrome #1234"
+                value={newDeviceNumber}
+                onChange={(e) => setNewDeviceNumber(e.target.value)}
+              />
             </div>
 
+            {!isStudentFromSession && (
+              <div>
+                <Label htmlFor="student-name">Student Name</Label>
+                <Input
+                  id="student-name"
+                  placeholder="e.g., Harry Potter"
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                />
+              </div>
+            )}
+
+            {isStudentFromSession && (
+              <div>
+                <Label htmlFor="student-grade">Student Grade</Label>
+                <Input
+                  id="student-grade"
+                  placeholder="e.g., A, B, C, D, or F"
+                  value={newStudentGrade}
+                  onChange={(e) => setNewStudentGrade(e.target.value)}
+                />
+              </div>
+            )}
+
             <div>
-              <Label htmlFor="student-name">Student Name(s)</Label>
-              <Popover open={studentOpen} onOpenChange={setStudentOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    className="w-full justify-between mt-1 h-auto min-h-[40px]"
-                  >
-                    <div className="flex flex-wrap gap-1">
-                      {selectedStudents.length > 0 ? (
-                        selectedStudents.map((student) => (
-                          <Badge
-                            key={student}
-                            variant="secondary"
-                            className="gap-1"
-                          >
-                            {student}
-                            <X
-                              className="w-3 h-3 cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedStudents(
-                                  removeStudent(selectedStudents, student),
-                                );
-                              }}
-                            />
-                          </Badge>
-                        ))
-                      ) : (
-                        <span className="text-slate-500">
-                          Select students...
-                        </span>
-                      )}
-                    </div>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
-                  <Command>
-                    <CommandInput placeholder="Search students..." />
-                    <CommandList>
-                      <CommandEmpty>No student found.</CommandEmpty>
-                      <CommandGroup>
-                        {STUDENTS.map((student) => (
-                          <CommandItem
-                            key={student}
-                            value={student}
-                            onSelect={() => {
-                              setSelectedStudents(
-                                toggleStudent(selectedStudents, student),
-                              );
-                            }}
-                          >
-                            <Checkbox
-                              checked={selectedStudents.includes(student)}
-                              className="mr-2"
-                            />
-                            {student}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+              <Label htmlFor="device-type">Device Type</Label>
+              <Select value={newDeviceType} onValueChange={(v) => setNewDeviceType(v as any)}>
+                <SelectTrigger id="device-type">
+                  <SelectValue placeholder="Select device type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ipad">iPad</SelectItem>
+                  <SelectItem value="chromebook">Chromebook</SelectItem>
+                  <SelectItem value="laptop">Laptop</SelectItem>
+                  <SelectItem value="pc_laptop">PC Laptop</SelectItem>
+                  <SelectItem value="macbook">MacBook</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
               <Label htmlFor="issue">Issue Description</Label>
-              <Textarea id="issue" placeholder="Describe the problem..." />
+              <Textarea
+                id="issue"
+                placeholder="Describe the problem..."
+                value={newIssueDescription}
+                onChange={(e) => setNewIssueDescription(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="issue-type">Issue Type</Label>
+              <Select value={newIssueType} onValueChange={(v) => setNewIssueType(v as "repair")}>
+                <SelectTrigger id="issue-type">
+                  <SelectValue placeholder="Select issue type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="repair">Repair</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
               <Label htmlFor="priority">Priority</Label>
-              <Select>
+              <Select value={newPriority} onValueChange={(v) => setNewPriority(v as any)}>
                 <SelectTrigger id="priority">
                   <SelectValue placeholder="Select priority" />
                 </SelectTrigger>
@@ -360,7 +567,7 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
             <Button variant="outline" onClick={() => setShowNewRepair(false)}>
               Cancel
             </Button>
-            <Button onClick={() => setShowNewRepair(false)}>
+            <Button onClick={handleSubmitRepair}>
               Submit Repair
             </Button>
           </DialogFooter>
@@ -425,9 +632,50 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
                 <span>{selectedRepair.submitted}</span>
               </div>
 
+              {/* Notes Section */}
+              <div className="border-t pt-4">
+                <h3 className="text-sm font-medium mb-2">Notes</h3>
+                {isLoadingNotes ? (
+                  <p className="text-sm text-slate-400">Loading notes...</p>
+                ) : ticketNotes.length === 0 ? (
+                  <p className="text-sm text-slate-400">No notes yet</p>
+                ) : (
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {ticketNotes.map((note) => (
+                      <div key={note.id} className="text-sm p-2 bg-slate-50 rounded">
+                        <p>{note.noteText}</p>
+                        <span className="text-xs text-slate-400">
+                          {formatRelativeTime(note.createdAt)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-2 flex gap-2">
+                  <Textarea
+                    value={newNoteText}
+                    onChange={(e) => setNewNoteText(e.target.value)}
+                    placeholder="Add a note..."
+                    className="flex-1 min-h-[60px]"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleAddNote}
+                    disabled={isAddingNote || !newNoteText.trim()}
+                  >
+                    {isAddingNote ? '...' : 'Add'}
+                  </Button>
+                </div>
+              </div>
+
               {selectedRepair.status !== "completed" && (
                 <div className="pt-2 space-y-2">
-                  <Button className="w-full" variant="outline">
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={handleOpenUpdateStatus}
+                    data-testid="button-open-update-status"
+                  >
                     Update Status
                   </Button>
                   <Button className="w-full">Mark as Complete</Button>
@@ -435,6 +683,49 @@ export function Repairs({ triggerNew, onTriggerComplete }: RepairsProps) {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Update Status Dialog */}
+      <Dialog open={showUpdateStatus} onOpenChange={setShowUpdateStatus}>
+        <DialogContent className="max-w-sm" data-testid="dialog-update-status">
+          <DialogHeader>
+            <DialogTitle>Update Status</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="update-status">Status</Label>
+              <Select value={updateStatus} onValueChange={(v) => setUpdateStatus(v as any)}>
+                <SelectTrigger id="update-status" data-testid="select-update-status">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="issue">Issue</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowUpdateStatus(false)}
+              data-testid="button-cancel-update-status"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdateStatus}
+              disabled={!selectedRepair}
+              data-testid="button-confirm-update-status"
+            >
+              Update
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

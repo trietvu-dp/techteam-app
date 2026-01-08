@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ClipboardCheck, Wrench, Trophy, BookOpen } from "lucide-react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import logoImage from "@assets/vilspasslogo-1.png";
 
 export default function Landing() {
@@ -36,7 +37,12 @@ export default function Landing() {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-background to-purple-50 dark:from-blue-950 dark:via-background dark:to-purple-950">
+      {/* Theme Toggle */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
+
       {/* Hero Section */}
       <div className="container mx-auto px-4 py-16 text-center">
         <img
@@ -45,13 +51,13 @@ export default function Landing() {
           className="mx-auto mb-8 h-16 object-contain"
           data-testid="img-logo"
         />
-        <h1 className="text-5xl font-bold mb-6 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+        <h1 className="text-5xl font-bold mb-6 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent">
           TechTeam
         </h1>
-        <p className="text-2xl text-slate-700 mb-4">
+        <p className="text-2xl text-foreground mb-4">
           Empower Student Tech Teams
         </p>
-        <p className="text-lg text-slate-600 mb-8 max-w-2xl mx-auto">
+        <p className="text-lg text-muted-foreground mb-8 max-w-2xl mx-auto">
           A platform for managing device checks, repairs, and building technical
           skills.
         </p>
@@ -108,8 +114,8 @@ export default function Landing() {
       </div> */}
 
       {/* Footer */}
-      <footer className="border-t bg-white py-8">
-        <div className="container mx-auto px-4 text-center text-sm text-slate-600">
+      <footer className="border-t bg-background py-8">
+        <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
           <p>&copy; 2025 VILS|Digital Promise. All rights reserved.</p>
         </div>
       </footer>
