@@ -109,6 +109,35 @@ studentRouter.get('/skills-progress', requireAuth, requireUserSchool, async (req
     }
 });
 
+// Get teachers for the student's school (for device check forms)
+studentRouter.get('/teachers', requireAuth, requireUserSchool, async (req: any, res) => {
+    try {
+        const user = req.user;
+        const users = await storage.getUsersBySchool(user.schoolId);
+
+        // Filter to only teachers (admin role) and sort alphabetically
+        const teachers = users
+            .filter(u => u.role === 'admin')
+            .sort((a, b) => {
+                const nameA = `${a.lastName || ''} ${a.firstName || ''}`.trim();
+                const nameB = `${b.lastName || ''} ${b.firstName || ''}`.trim();
+                return nameA.localeCompare(nameB);
+            })
+            .map(teacher => ({
+                id: teacher.id,
+                firstName: teacher.firstName,
+                lastName: teacher.lastName,
+                username: teacher.username,
+                email: teacher.email,
+            }));
+
+        res.json(teachers);
+    } catch (error) {
+        console.error("Error fetching teachers:", error);
+        res.status(500).json({message: "Failed to fetch teachers"});
+    }
+});
+
 // Get student's device checks
 studentRouter.get('/device-checks', requireAuth, requireUserSchool, async (req: any, res) => {
     try {

@@ -7,7 +7,6 @@ import {
     requireUserSchool,
     hashPassword
 } from "../middleware/auth.ts";
-import bcrypt from "bcrypt";
 
 export const schoolsRouter = Router();
 
@@ -37,8 +36,8 @@ schoolsRouter.get('/:schoolId/students', requireAuth, requireAdminOrSuperAdmin, 
     }
 });
 
-// Get all teachers for a school (authenticated users only)
-schoolsRouter.get('/:schoolId/teachers', requireAuth, requireSchoolContext, async (req: any, res) => {
+// Get all teachers for a school (school admin or super admin)
+schoolsRouter.get('/:schoolId/teachers', requireAuth, requireAdminOrSuperAdmin, requireSchoolContext, async (req: any, res) => {
     try {
         const {schoolId} = req.params;
         const users = await storage.getUsersBySchool(schoolId);
@@ -222,7 +221,7 @@ schoolsRouter.post('/:schoolId/students/:studentId/reset-password', requireAuth,
         }
 
         // Hash the new password
-        const passwordHash = await bcrypt.hash(newPassword, 10);
+        const passwordHash = await hashPassword(newPassword);
         await storage.updateUser(studentId, {passwordHash});
 
         res.json({message: "Password reset successfully"});

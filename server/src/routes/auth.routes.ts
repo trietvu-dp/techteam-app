@@ -14,8 +14,6 @@ authRouter.post('/login', async (req, res) => {
             return res.status(400).json({message: fromError(validation.error).toString()});
         }
 
-        console.error(validation)
-
         const {username, password} = validation.data;
 
         // Find user by username
@@ -23,8 +21,6 @@ authRouter.post('/login', async (req, res) => {
         if (!user || !user.isActive) {
             return res.status(401).json({message: "Invalid credentials"});
         }
-
-        console.log(user)
 
         // Verify password
         const isValid = await verifyPassword(password, user.passwordHash);

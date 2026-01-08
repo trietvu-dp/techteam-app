@@ -57,7 +57,7 @@ challengesRouter.get('/recommended', requireAuth, requireUserSchool, async (req:
 })
 
 // Get challenge by ID
-challengesRouter.get('/:id', requireAuth, async (req: any, res) => {
+challengesRouter.get('/:id', requireAuth, requireUserSchool, async (req: any, res) => {
     try {
         const {id} = req.params;
 
