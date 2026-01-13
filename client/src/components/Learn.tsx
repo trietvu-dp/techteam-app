@@ -12,7 +12,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Challenge, Resource, User } from '@shared/schema';
-import { 
+import {
   Trophy,
   Star,
   Target,
@@ -28,7 +28,8 @@ import {
   Zap,
   Rocket,
   Sparkles,
-  Flame
+  Flame,
+  FileText
 } from 'lucide-react';
 
 export function Learn() {
@@ -103,8 +104,46 @@ export function Learn() {
   // Transform resources data - use all fields from the API
   const resources = resourcesData;
 
-  const recommendations = resources.slice(0, 3);
-  const quickVideos = resources.filter((r) => r.contentType === 'video').slice(0, 3);
+  // Static recommended resources - curated docs and videos
+  const recommendedResources = [
+    {
+      id: 'doc-1',
+      title: 'NL72 Self-service Manual w/LTE section',
+      url: 'https://docs.google.com/document/d/11OyhymvihbQsrWVTvJrab8670k96mTGPO3jkzU-VQdA/edit?tab=t.0#heading=h.1m95omm6or9l',
+      contentType: 'document' as const,
+    },
+    {
+      id: 'video-1',
+      title: 'Hinge Repair for J5 CTL Chromebook',
+      url: 'https://www.youtube.com/watch?v=9cjx0r2cijY',
+      contentType: 'video' as const,
+    },
+    {
+      id: 'video-2',
+      title: 'How To Fix Replace Keyboard Key - HP Chromebook 11 Letter Number Arrow',
+      url: 'https://www.youtube.com/watch?v=FplP-E_kUeE',
+      contentType: 'video' as const,
+    },
+    {
+      id: 'video-3',
+      title: 'Laptop screen replacement How to replace laptop screen CTL NL7',
+      url: 'https://www.youtube.com/watch?v=nNtjMfHaniE',
+      contentType: 'video' as const,
+    },
+    {
+      id: 'video-4',
+      title: 'iPad Pro: How to Find IMEI Number (2 Ways)',
+      url: 'https://www.youtube.com/watch?v=ncLRG2K12AA',
+      contentType: 'video' as const,
+    },
+    {
+      id: 'video-5',
+      title: 'How to Fix iPad Black Screen of Death',
+      url: 'https://www.youtube.com/watch?v=PxNKgsBmCIw&t=70s',
+      contentType: 'video' as const,
+      duration: '9:14',
+    },
+  ];
 
   // Filter resources by content type
   const filteredResources = useMemo(() => {
@@ -225,57 +264,32 @@ export function Learn() {
           <div>
             <h3 className="mb-3">Recommended for You</h3>
             <div className="space-y-2">
-              {recommendations.map((rec, index) => (
-                <Card key={index} className="p-3">
-                  <div className="flex items-center justify-between">
+              {recommendedResources.map((rec) => (
+                <Card key={rec.id} className="p-3">
+                  <a
+                    href={rec.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between hover:opacity-80 transition-opacity"
+                  >
                     <div className="flex items-start gap-3 flex-1">
-                      <div className="p-2 bg-blue-50 rounded-lg">
-                        <Lightbulb className="w-4 h-4 text-blue-600" />
+                      <div className={`p-2 rounded-lg ${rec.contentType === 'video' ? 'bg-red-50' : 'bg-blue-50'}`}>
+                        {rec.contentType === 'video' ? (
+                          <Video className="w-4 h-4 text-red-600" />
+                        ) : (
+                          <FileText className="w-4 h-4 text-blue-600" />
+                        )}
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="text-sm">{rec.title}</h4>
                           <Badge variant="secondary" className="text-xs">{rec.contentType}</Badge>
                         </div>
-                        <p className="text-xs text-slate-600">{rec.description ?? 'No description available'}</p>
                         {rec.duration && <p className="text-xs text-slate-400 mt-1">{rec.duration}</p>}
                       </div>
                     </div>
-                    <Button size="sm">Start</Button>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Videos */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Video className="w-4 h-4" />
-              <h3>Quick Learning Videos</h3>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {quickVideos.map((video) => (
-                <Card key={video.id} className="p-3 cursor-pointer hover:shadow-md transition-shadow">
-                  <div className="aspect-video bg-gradient-to-br from-blue-100 to-purple-100 rounded-lg mb-2 flex items-center justify-center relative">
-                    {video.thumbnailUrl ? (
-                      <img src={video.thumbnailUrl} alt={video.title} className="w-full h-full object-cover rounded-lg" />
-                    ) : (
-                      <Video className="w-12 h-12 text-blue-600" />
-                    )}
-                    {video.duration && (
-                      <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded">
-                        {video.duration}
-                      </div>
-                    )}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-10 h-10 bg-white/90 rounded-full flex items-center justify-center">
-                        <Play className="w-5 h-5 text-blue-600 ml-0.5" />
-                      </div>
-                    </div>
-                  </div>
-                  <h4 className="text-xs mb-1">{video.title}</h4>
-                  <p className="text-xs text-slate-600">{video.views ?? 0} views</p>
+                    <ExternalLink className="w-4 h-4 text-slate-400" />
+                  </a>
                 </Card>
               ))}
             </div>
