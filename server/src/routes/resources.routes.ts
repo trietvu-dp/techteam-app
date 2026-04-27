@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { storage } from "../db/storage.ts";
-import { requireAuth, requireUserSchool } from "../middleware/auth.ts";
+import { requireAuth } from "../middleware/auth.ts";
 
 export const resourcesRouter = Router();
 
 // List global resources (supports category/contentType/search)
-resourcesRouter.get('/', requireAuth, requireUserSchool, async (req: any, res) => {
+resourcesRouter.get('/', requireAuth, async (req: any, res) => {
     try {
         const resources = await storage.getResources({
             category: req.query.category as string | undefined,
@@ -21,10 +21,8 @@ resourcesRouter.get('/', requireAuth, requireUserSchool, async (req: any, res) =
 });
 
 // Fetch a single global resource by id
-resourcesRouter.get('/:id', requireAuth, requireUserSchool, async (req: any, res) => {
+resourcesRouter.get('/:id', requireAuth, async (req: any, res) => {
     try {
-        const user = req.user;
-
         const resource = await storage.getResource(req.params.id);
         if (!resource) {
             return res.status(404).json({message: "Resource not found"});
