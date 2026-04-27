@@ -10,6 +10,7 @@ import { ticketsRouter } from "./tickets.routes.ts";
 import { workLogsRouter } from "./work-logs.routes.ts";
 import { challengesRouter } from "./challenges.routes.ts";
 import { resourcesRouter } from "./resources.routes.ts";
+import { coursesRouter } from "./courses.routes.ts";
 
 export async function registerRoutes(app: Express): Promise<Server> {
     // Setup cookie parser for session management
@@ -34,6 +35,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app.use('/api/work-logs', workLogsRouter);
     app.use('/api/challenges', challengesRouter);
     app.use('/api/resources', resourcesRouter);
+    app.use('/api/courses', coursesRouter);
 
     const httpServer = createServer(app);
     return httpServer;

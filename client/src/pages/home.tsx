@@ -24,6 +24,7 @@ import { Dashboard } from "@/components/Dashboard";
 import { DeviceChecks } from "@/components/DeviceChecks";
 import { Repairs } from "@/components/Repairs";
 import { Learn } from "@/components/Learn";
+import { CourseViewer } from "@/components/CourseViewer";
 import { Resources } from "@/components/Resources";
 import { Profile } from "@/components/Profile";
 import { Onboarding } from "@/components/Onboarding";
@@ -169,6 +170,9 @@ export default function Home() {
                       triggerNew={triggerRepair}
                       onTriggerComplete={() => setTriggerRepair(false)}
                     />
+                  </Route>
+                  <Route path="/learn/courses/:id">
+                    <CourseViewer />
                   </Route>
                   <Route path="/learn">
                     <Learn />

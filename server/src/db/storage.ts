@@ -25,6 +25,12 @@ import {
   type InsertUserCertification,
   type Session,
   type InsertSession,
+  type Course,
+  type InsertCourse,
+  type Lesson,
+  type InsertLesson,
+  type CourseProgress,
+  type InsertCourseProgress,
 } from '@shared/schema.ts';
 
 // Filter interfaces
@@ -140,6 +146,25 @@ export interface IStorage {
   createUserCertification(userCert: InsertUserCertification): Promise<UserCertification>;
   getUserCertifications(userId: string, schoolId: string): Promise<UserCertification[]>;
   updateUserCertification(id: string, schoolId: string, updates: Partial<UserCertification>): Promise<UserCertification>;
+
+  // Course operations (global)
+  getCourses(publishedOnly?: boolean): Promise<Course[]>;
+  getCourse(id: string): Promise<Course | undefined>;
+  createCourse(course: InsertCourse): Promise<Course>;
+  updateCourse(id: string, updates: Partial<Course>): Promise<Course>;
+  deleteCourse(id: string): Promise<void>;
+
+  // Lesson operations
+  getLessonsByCourse(courseId: string): Promise<Lesson[]>;
+  getLesson(id: string): Promise<Lesson | undefined>;
+  createLesson(lesson: InsertLesson): Promise<Lesson>;
+  updateLesson(id: string, updates: Partial<Lesson>): Promise<Lesson>;
+  deleteLesson(id: string): Promise<void>;
+
+  // Course progress operations
+  getCourseProgress(userId: string, courseId: string): Promise<CourseProgress[]>;
+  upsertLessonProgress(progress: InsertCourseProgress): Promise<CourseProgress>;
+  getUserCourseProgressSummary(userId: string): Promise<{ courseId: string; totalLessons: number; completedLessons: number }[]>;
 }
 
 // Database storage implementation using Drizzle ORM
@@ -645,6 +670,139 @@ export class DbStorage implements IStorage {
       .returning();
     if (!cert) throw new Error('User certification not found');
     return cert;
+  }
+
+  // Course operations
+  async getCourses(publishedOnly = false): Promise<Course[]> {
+    if (publishedOnly) {
+      return await db.select().from(schemaTypes.courses)
+        .where(eq(schemaTypes.courses.status, 'published'))
+        .orderBy(schemaTypes.courses.sortOrder);
+    }
+    return await db.select().from(schemaTypes.courses).orderBy(schemaTypes.courses.sortOrder);
+  }
+
+  async getCourse(id: string): Promise<Course | undefined> {
+    const [course] = await db.select().from(schemaTypes.courses).where(eq(schemaTypes.courses.id, id));
+    return course;
+  }
+
+  async createCourse(insertCourse: InsertCourse): Promise<Course> {
+    const [course] = await db.insert(schemaTypes.courses).values(insertCourse).returning();
+    return course;
+  }
+
+  async updateCourse(id: string, updates: Partial<Course>): Promise<Course> {
+    const [course] = await db.update(schemaTypes.courses)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schemaTypes.courses.id, id))
+      .returning();
+    if (!course) throw new Error('Course not found');
+    return course;
+  }
+
+  async deleteCourse(id: string): Promise<void> {
+    const result = await db.delete(schemaTypes.courses)
+      .where(eq(schemaTypes.courses.id, id))
+      .returning();
+    if (result.length === 0) throw new Error('Course not found');
+  }
+
+  // Lesson operations
+  async getLessonsByCourse(courseId: string): Promise<Lesson[]> {
+    return await db.select().from(schemaTypes.lessons)
+      .where(eq(schemaTypes.lessons.courseId, courseId))
+      .orderBy(schemaTypes.lessons.sortOrder);
+  }
+
+  async getLesson(id: string): Promise<Lesson | undefined> {
+    const [lesson] = await db.select().from(schemaTypes.lessons).where(eq(schemaTypes.lessons.id, id));
+    return lesson;
+  }
+
+  async createLesson(insertLesson: InsertLesson): Promise<Lesson> {
+    const [lesson] = await db.insert(schemaTypes.lessons).values(insertLesson).returning();
+    return lesson;
+  }
+
+  async updateLesson(id: string, updates: Partial<Lesson>): Promise<Lesson> {
+    const [lesson] = await db.update(schemaTypes.lessons)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schemaTypes.lessons.id, id))
+      .returning();
+    if (!lesson) throw new Error('Lesson not found');
+    return lesson;
+  }
+
+  async deleteLesson(id: string): Promise<void> {
+    const result = await db.delete(schemaTypes.lessons)
+      .where(eq(schemaTypes.lessons.id, id))
+      .returning();
+    if (result.length === 0) throw new Error('Lesson not found');
+  }
+
+  // Course progress operations
+  async getCourseProgress(userId: string, courseId: string): Promise<CourseProgress[]> {
+    return await db.select().from(schemaTypes.courseProgress)
+      .where(and(
+        eq(schemaTypes.courseProgress.userId, userId),
+        eq(schemaTypes.courseProgress.courseId, courseId)
+      ));
+  }
+
+  async upsertLessonProgress(progress: InsertCourseProgress): Promise<CourseProgress> {
+    // Check if progress record exists
+    const [existing] = await db.select().from(schemaTypes.courseProgress)
+      .where(and(
+        eq(schemaTypes.courseProgress.userId, progress.userId),
+        eq(schemaTypes.courseProgress.lessonId, progress.lessonId)
+      ))
+      .limit(1);
+
+    if (existing) {
+      const [updated] = await db.update(schemaTypes.courseProgress)
+        .set({ completed: true, completedAt: new Date() })
+        .where(eq(schemaTypes.courseProgress.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(schemaTypes.courseProgress)
+      .values({ ...progress, completed: true, completedAt: new Date() })
+      .returning();
+    return created;
+  }
+
+  async getUserCourseProgressSummary(userId: string): Promise<{ courseId: string; totalLessons: number; completedLessons: number }[]> {
+    // Get all published courses with lesson counts
+    const coursesWithLessons = await db.select({
+      courseId: schemaTypes.courses.id,
+      totalLessons: drizzleSql<number>`count(${schemaTypes.lessons.id})::int`,
+    })
+      .from(schemaTypes.courses)
+      .leftJoin(schemaTypes.lessons, eq(schemaTypes.courses.id, schemaTypes.lessons.courseId))
+      .where(eq(schemaTypes.courses.status, 'published'))
+      .groupBy(schemaTypes.courses.id);
+
+    // Get completed lessons per course for this user
+    const completedByUser = await db.select({
+      courseId: schemaTypes.courseProgress.courseId,
+      completedLessons: drizzleSql<number>`count(*)::int`,
+    })
+      .from(schemaTypes.courseProgress)
+      .where(and(
+        eq(schemaTypes.courseProgress.userId, userId),
+        eq(schemaTypes.courseProgress.completed, true)
+      ))
+      .groupBy(schemaTypes.courseProgress.courseId);
+
+    const completedMap = new Map(completedByUser.map(c => [c.courseId, c.completedLessons]));
+
+    return coursesWithLessons.map(c => ({
+      courseId: c.courseId,
+      totalLessons: c.totalLessons,
+      completedLessons: completedMap.get(c.courseId) || 0,
+    }));
   }
 }
 

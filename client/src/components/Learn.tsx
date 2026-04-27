@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
-import type { Challenge, Resource, User } from '@shared/schema';
+import type { Challenge, Resource, User, Course } from '@shared/schema';
 import {
   Trophy,
   Star,
@@ -29,13 +29,15 @@ import {
   Rocket,
   Sparkles,
   Flame,
-  FileText
+  FileText,
+  GraduationCap
 } from 'lucide-react';
+import { Link } from 'wouter';
 
 export function Learn() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState('challenges');
+  const [activeTab, setActiveTab] = useState('courses');
   const [showLogWork, setShowLogWork] = useState(false);
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [selectedChallenge, setSelectedChallenge] = useState<{
@@ -68,6 +70,18 @@ export function Learn() {
   // Fetch resources from the database
   const { data: resourcesData = [], isLoading: resourcesLoading, error: resourcesError } = useQuery<Resource[]>({
     queryKey: ['/api/resources'],
+    enabled: !!user,
+  });
+
+  // Fetch published courses
+  const { data: coursesData = [], isLoading: coursesLoading } = useQuery<Course[]>({
+    queryKey: ['/api/courses'],
+    enabled: !!user,
+  });
+
+  // Fetch course progress summary
+  const { data: progressSummary = [] } = useQuery<{ courseId: string; totalLessons: number; completedLessons: number }[]>({
+    queryKey: ['/api/courses/progress/summary'],
     enabled: !!user,
   });
 
@@ -184,12 +198,75 @@ export function Learn() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="w-full grid grid-cols-4">
+        <TabsList className="w-full grid grid-cols-5">
+          <TabsTrigger value="courses">Courses</TabsTrigger>
           <TabsTrigger value="challenges">Challenges</TabsTrigger>
           <TabsTrigger value="log">Log Work</TabsTrigger>
           <TabsTrigger value="rankings">Rankings</TabsTrigger>
           <TabsTrigger value="resources">Resources</TabsTrigger>
         </TabsList>
+
+        {/* COURSES TAB */}
+        <TabsContent value="courses" className="space-y-4 mt-4">
+          <Card className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
+            <div className="flex items-center gap-2 mb-2">
+              <GraduationCap className="w-5 h-5 text-purple-600" />
+              <h3>Learning Courses</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              Structured courses with video, document, and article lessons
+            </p>
+          </Card>
+
+          {coursesLoading ? (
+            <div className="text-center py-8 text-slate-500">Loading courses...</div>
+          ) : coursesData.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-slate-500">No courses available yet</p>
+              <p className="text-sm text-slate-400">Check back soon for new learning content</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {coursesData.map((course) => {
+                const prog = progressSummary.find(p => p.courseId === course.id);
+                const percent = prog && prog.totalLessons > 0
+                  ? Math.round((prog.completedLessons / prog.totalLessons) * 100)
+                  : 0;
+                return (
+                  <Link key={course.id} href={`/learn/courses/${course.id}`}>
+                    <Card className="p-4 cursor-pointer hover:shadow-md transition-shadow">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 bg-purple-50 rounded-lg">
+                          <GraduationCap className="w-5 h-5 text-purple-600" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between mb-1">
+                            <h4 className="text-sm font-medium">{course.title}</h4>
+                            <Badge variant="secondary" className="capitalize text-xs">
+                              {course.difficulty}
+                            </Badge>
+                          </div>
+                          {course.description && (
+                            <p className="text-xs text-slate-600 line-clamp-2">{course.description}</p>
+                          )}
+                          <div className="mt-2">
+                            <Progress value={percent} className="h-2" />
+                            <div className="flex justify-between mt-1">
+                              <p className="text-xs text-slate-600">{percent}% complete</p>
+                              {prog && (
+                                <p className="text-xs text-slate-500">{prog.completedLessons}/{prog.totalLessons} lessons</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
 
         {/* CHALLENGES TAB */}
         <TabsContent value="challenges" className="space-y-4 mt-4">

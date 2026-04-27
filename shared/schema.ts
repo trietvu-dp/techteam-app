@@ -4,7 +4,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Enums
-export const userRoleEnum = pgEnum("user_role", ["super_admin", "admin", "student"]);
+export const userRoleEnum = pgEnum("user_role", ["super_admin", "admin", "student", "internal"]);
 export const avatarTypeEnum = pgEnum("avatar_type", ["rocket", "star", "lightning", "trophy", "medal", "fire", "robot", "laptop", "wrench", "gear"]);
 export const ticketStatusEnum = pgEnum("ticket_status", ["pending", "in_progress", "completed", "issue"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["low", "medium", "high"]);
@@ -14,6 +14,8 @@ export const difficultyEnum = pgEnum("difficulty", ["beginner", "intermediate", 
 export const categoryEnum = pgEnum("category", ["hardware", "software", "network", "security", "troubleshooting", "best_practices", "certifications"]);
 export const contentTypeEnum = pgEnum("content_type", ["article", "video", "interactive", "document"]);
 export const achievementIconEnum = pgEnum("achievement_icon", ["trophy", "medal", "star", "fire", "lightning", "gear", "wrench", "rocket", "shield", "crown"]);
+export const courseStatusEnum = pgEnum("course_status", ["draft", "published", "archived"]);
+export const lessonTypeEnum = pgEnum("lesson_type", ["video", "document", "article"]);
 
 // Session storage table (Custom auth sessions)
 export const sessions = pgTable(
@@ -198,6 +200,51 @@ export const userCertifications = pgTable("user_certifications", {
   earnedAt: timestamp("earned_at"),
 });
 
+// Courses Table (global - not school-specific)
+export const courses = pgTable("courses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  thumbnailUrl: varchar("thumbnail_url", { length: 500 }),
+  status: courseStatusEnum("status").default("draft").notNull(),
+  category: categoryEnum("category").notNull(),
+  difficulty: difficultyEnum("difficulty").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Lessons Table (belongs to a course)
+export const lessons = pgTable("lessons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  courseId: varchar("course_id").references(() => courses.id, { onDelete: "cascade" }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  lessonType: lessonTypeEnum("lesson_type").notNull(),
+  s3Key: varchar("s3_key", { length: 500 }),
+  content: text("content"),
+  duration: varchar("duration", { length: 50 }),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("IDX_lesson_course").on(table.courseId),
+]);
+
+// Course Progress Table (tracks per-user lesson completion)
+export const courseProgress = pgTable("course_progress", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  courseId: varchar("course_id").references(() => courses.id, { onDelete: "cascade" }).notNull(),
+  lessonId: varchar("lesson_id").references(() => lessons.id, { onDelete: "cascade" }).notNull(),
+  completed: boolean("completed").default(false).notNull(),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("IDX_progress_user_course").on(table.userId, table.courseId),
+]);
+
 // ==================== Zod Schemas ====================
 
 // Schools
@@ -318,3 +365,32 @@ export const insertUserCertificationSchema = createInsertSchema(userCertificatio
 export const selectUserCertificationSchema = createSelectSchema(userCertifications);
 export type InsertUserCertification = z.infer<typeof insertUserCertificationSchema>;
 export type UserCertification = typeof userCertifications.$inferSelect;
+
+// Courses
+export const insertCourseSchema = createInsertSchema(courses).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const selectCourseSchema = createSelectSchema(courses);
+export type InsertCourse = z.infer<typeof insertCourseSchema>;
+export type Course = typeof courses.$inferSelect;
+
+// Lessons
+export const insertLessonSchema = createInsertSchema(lessons).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const selectLessonSchema = createSelectSchema(lessons);
+export type InsertLesson = z.infer<typeof insertLessonSchema>;
+export type Lesson = typeof lessons.$inferSelect;
+
+// Course Progress
+export const insertCourseProgressSchema = createInsertSchema(courseProgress).omit({
+  id: true,
+  createdAt: true,
+});
+export const selectCourseProgressSchema = createSelectSchema(courseProgress);
+export type InsertCourseProgress = z.infer<typeof insertCourseProgressSchema>;
+export type CourseProgress = typeof courseProgress.$inferSelect;
