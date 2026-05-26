@@ -103,14 +103,17 @@ export const requireSuperAdmin = requireRole('super_admin');
 // Helper middleware to require school admin or super admin
 export const requireAdminOrSuperAdmin = requireRole('admin', 'super_admin');
 
+// Helper middleware to require content manager (internal staff or super admin)
+export const requireContentManager = requireRole('internal', 'super_admin');
+
 // Middleware to ensure school context matches user's school (unless super admin)
 export function requireSchoolContext(req: any, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  // Super admins can access any school
-  if (req.user.role === 'super_admin') {
+  // Super admins and internal staff can access any school (internal has no schoolId)
+  if (req.user.role === 'super_admin' || req.user.role === 'internal') {
     return next();
   }
 

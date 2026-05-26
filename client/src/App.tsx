@@ -11,6 +11,7 @@ import Login from '@/pages/login';
 import Home from '@/pages/home';
 import SuperAdminDashboard from '@/pages/super-admin-dashboard';
 import SchoolAdminDashboard from '@/pages/school-admin-dashboard';
+import InternalDashboard from '@/pages/internal-dashboard';
 import { useAuth } from '@/hooks/useAuth';
 
 function Router() {
@@ -37,6 +38,7 @@ function Router() {
   const getDashboard = () => {
     if (user?.role === 'super_admin') return SuperAdminDashboard;
     if (user?.role === 'admin') return SchoolAdminDashboard;
+    if (user?.role === 'internal') return InternalDashboard;
     return Home;
   };
 

@@ -165,6 +165,38 @@ adminRouter.get('/all-school-admins', requireAuth, requireSuperAdmin, async (req
     }
 });
 
+// Create internal staff user (super admin only)
+adminRouter.post('/internal-users', requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+        const {username, email, password, firstName, lastName} = req.body;
+
+        if (!username || !email || !password) {
+            return res.status(400).json({message: "username, email, and password are required"});
+        }
+
+        const passwordHash = await hashPassword(password);
+
+        const user = await storage.createUser({
+            username,
+            email,
+            passwordHash,
+            firstName,
+            lastName,
+            schoolId: undefined, // Internal users don't belong to a school
+            role: 'internal',
+            points: 0,
+            streak: 0,
+            selectedAvatar: 'rocket',
+            isActive: true,
+        });
+
+        res.status(201).json({id: user.id, username: user.username, email: user.email, role: user.role});
+    } catch (error) {
+        console.error("Error creating internal user:", error);
+        res.status(500).json({message: "Failed to create internal user"});
+    }
+});
+
 // Get all students (super admin only)
 adminRouter.get('/all-students', requireAuth, requireSuperAdmin, async (req, res) => {
     try {
